@@ -1,359 +1,364 @@
 import random
 import math
 import re
+from dataclasses import dataclass
 from typing import List, Tuple, Dict, Optional
 import matplotlib.pyplot as plt
 
-# Type aliases
-Operation = Tuple[int, int]
+# -----------------------------
+# Types
+# -----------------------------
+Operation = Tuple[int, int]        # (machine, processing_time)
 Job = List[Operation]
 JSSP = List[Job]
-Chromosome = List[Tuple[int, int]]
+Chromosome = List[int]             # job-based chromosome: list of job IDs
+
 
 # ============================================================================
-# DATA LOADING - FROM FILE ONLY
+# OR-LIBRARY INSTANCE LOADING (BY NAME)
 # ============================================================================
 
-def parse_orlib_file(filename='jobshop1.txt'):
-    """
-    Parse OR-Library jobshop1.txt file and extract all instances.
-    Returns a dictionary of instance_name: instance_text
-    """
-    instances = {}
-    
-    try:
-        with open(filename, 'r') as f:
-            lines = f.readlines()
-        
-        print(f"Read {len(lines)} lines from {filename}")
-        
-        i = 0
-        while i < len(lines):
-            line = lines[i].strip()
-            
-            # Look for instance markers like "instance ft06" or "ft06"
-            if 'instance' in line.lower():
-                # Extract instance name
-                parts = line.split()
-                instance_name = None
-                for part in parts:
-                    # Look for common instance names
-                    if any(part.lower().startswith(prefix) for prefix in ['ft', 'la', 'abz', 'orb', 'yn', 'swv']):
-                        instance_name = part.lower()
-                        break
-                
-                if instance_name:
-                    print(f"  Found instance: {instance_name}")
-                    i += 1
-                    
-                    # Skip empty lines and comments
-                    while i < len(lines) and (not lines[i].strip() or lines[i].strip().startswith('+') or lines[i].strip().startswith('#')):
-                        i += 1
-                    
-                    # Now we should be at the header line (num_jobs num_machines)
-                    if i < len(lines):
-                        header_line = lines[i].strip()
-                        parts = header_line.split()
-                        
-                        if len(parts) >= 2:
-                            try:
-                                num_jobs = int(parts[0])
-                                num_machines = int(parts[1])
-                                
-                                # Collect this line and the next num_jobs lines
-                                instance_lines = [header_line]
-                                i += 1
-                                
-                                job_count = 0
-                                while i < len(lines) and job_count < num_jobs:
-                                    job_line = lines[i].strip()
-                                    # Only add lines with actual data (not empty, not comments)
-                                    if job_line and not job_line.startswith('+') and not job_line.startswith('#') and not 'instance' in job_line.lower():
-                                        # Check if line has numbers
-                                        if re.findall(r'\d+', job_line):
-                                            instance_lines.append(job_line)
-                                            job_count += 1
-                                    i += 1
-                                
-                                # Only store if we got all jobs
-                                if job_count == num_jobs:
-                                    instances[instance_name] = '\n'.join(instance_lines)
-                                    print(f"    ✓ Stored {instance_name}: {num_jobs}x{num_machines}")
-                                else:
-                                    print(f"    ⚠ Incomplete data for {instance_name}: got {job_count}/{num_jobs} jobs")
-                                continue
-                            except ValueError:
-                                pass
-            
-            i += 1
-        
-        if not instances:
-            print("\n⚠ WARNING: No instances found with standard markers.")
-            print("Attempting alternative parsing method...")
-            instances = parse_orlib_alternative(filename)
-        
-        return instances if instances else None
-    
-    except FileNotFoundError:
-        print(f"ERROR: Could not find '{filename}' in current directory")
-        print("Please make sure jobshop1.txt is in the same folder as this script.")
-        return None
-    except Exception as e:
-        print(f"ERROR parsing file: {e}")
-        return None
+KNOWN_PREFIXES = ("ft", "la", "abz", "orb", "swv", "yn")
 
 
-def parse_orlib_alternative(filename='jobshop1.txt'):
-    """
-    Alternative parser that looks for numerical patterns.
-    """
-    instances = {}
-    
-    try:
-        with open(filename, 'r') as f:
-            lines = f.readlines()
-        
-        print("  Using alternative parsing method...")
-        
-        i = 0
-        instance_count = 0
-        
-        while i < len(lines):
-            line = lines[i].strip()
-            
-            # Skip empty lines and comments
-            if not line or line.startswith('+') or line.startswith('#'):
-                i += 1
+def _is_comment_or_empty(line: str) -> bool:
+    s = line.strip()
+    return (not s) or s.startswith("+") or s.startswith("#")
+
+
+def scan_available_instance_names(filename: str) -> List[str]:
+    """Scan the file and list likely instance-name lines."""
+    names = []
+    seen = set()
+    with open(filename, "r") as f:
+        for raw in f:
+            s = raw.strip().lower()
+            if _is_comment_or_empty(s):
                 continue
-            
-            # Look for lines that might be headers (two integers)
-            parts = line.split()
-            if len(parts) >= 2:
-                try:
-                    num_jobs = int(parts[0])
-                    num_machines = int(parts[1])
-                    
-                    # Sanity check
-                    if 1 <= num_jobs <= 100 and 1 <= num_machines <= 100:
-                        instance_count += 1
-                        instance_name = f"instance_{instance_count}"
-                        
-                        # Check if we can find enough job lines
-                        instance_lines = [line]
-                        temp_i = i + 1
-                        jobs_found = 0
-                        
-                        while temp_i < len(lines) and jobs_found < num_jobs:
-                            job_line = lines[temp_i].strip()
-                            if job_line and not job_line.startswith('+'):
-                                # Check if line contains numbers
-                                nums = re.findall(r'-?\d+', job_line)
-                                if len(nums) >= num_machines * 2:
-                                    instance_lines.append(job_line)
-                                    jobs_found += 1
-                            temp_i += 1
-                        
-                        if jobs_found == num_jobs:
-                            instances[instance_name] = '\n'.join(instance_lines)
-                            print(f"    ✓ Found instance {instance_count}: {num_jobs}x{num_machines}")
-                            i = temp_i
-                            continue
-                
-                except ValueError:
-                    pass
-            
-            i += 1
-        
-        return instances if instances else None
-    
-    except Exception as e:
-        print(f"  ERROR in alternative parser: {e}")
-        return None
+
+            # Case 1: "instance ft06" style
+            if "instance" in s:
+                parts = s.split()
+                for p in parts:
+                    if p.startswith(KNOWN_PREFIXES) and any(ch.isdigit() for ch in p):
+                        if p not in seen:
+                            names.append(p)
+                            seen.add(p)
+
+            # Case 2: "ft06" alone in a line
+            if s.startswith(KNOWN_PREFIXES) and any(ch.isdigit() for ch in s) and len(s.split()) == 1:
+                if s not in seen:
+                    names.append(s)
+                    seen.add(s)
+
+    return names
+
+
+def extract_instance_text(filename: str, instance_name: str) -> str:
+    """
+    Extract one OR-Library instance by name (e.g., 'la01', 'la16', 'abz7').
+
+    Strategy:
+    - Find a line that contains the instance name (either standalone or after the word "instance")
+    - From the following non-empty, non-comment line: parse header 'num_jobs num_machines'
+    - Then read next num_jobs data lines
+    """
+    target = instance_name.strip().lower()
+    with open(filename, "r") as f:
+        lines = f.readlines()
+
+    # Find marker line
+    marker_idx = None
+    for i, raw in enumerate(lines):
+        s = raw.strip().lower()
+        if _is_comment_or_empty(s):
+            continue
+
+        # "instance la16" or similar
+        if "instance" in s and target in s.split():
+            marker_idx = i
+            break
+
+        # name alone: "la16"
+        if s == target:
+            marker_idx = i
+            break
+
+    if marker_idx is None:
+        available = scan_available_instance_names(filename)
+        raise ValueError(
+            f"Instance '{instance_name}' not found in {filename}.\n"
+            f"Some available names: {available[:20]}"
+        )
+
+    # Find header line after marker
+    j = marker_idx + 1
+    while j < len(lines) and _is_comment_or_empty(lines[j]):
+        j += 1
+
+    if j >= len(lines):
+        raise ValueError(
+            f"Found marker for '{instance_name}' but no header after it.")
+
+    header = lines[j].strip()
+    parts = header.split()
+    if len(parts) < 2:
+        raise ValueError(
+            f"Header after '{instance_name}' is invalid: '{header}'")
+
+    try:
+        num_jobs = int(parts[0])
+        num_machines = int(parts[1])
+    except ValueError:
+        raise ValueError(
+            f"Header after '{instance_name}' is not two integers: '{header}'")
+
+    # Collect job lines (skip blank/comment lines)
+    job_lines = [header]
+    j += 1
+    jobs_found = 0
+
+    while j < len(lines) and jobs_found < num_jobs:
+        s = lines[j].strip()
+        if not _is_comment_or_empty(s):
+            nums = re.findall(r"-?\d+", s)
+            if len(nums) >= 2:  # at least something numeric
+                job_lines.append(s)
+                jobs_found += 1
+        j += 1
+
+    if jobs_found != num_jobs:
+        raise ValueError(
+            f"Instance '{instance_name}': expected {num_jobs} job lines, got {jobs_found}."
+        )
+
+    return "\n".join(job_lines)
 
 
 def load_jssp_from_text(text: str) -> Tuple[JSSP, int, int]:
-    """Parse JSSP instance from text with robust error handling."""
+    """
+    Parse JSSP instance from text:
+    - header line: num_jobs num_machines
+    - then num_jobs lines, each containing 2*num_machines integers: (machine, time) pairs
+    """
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
-    
     if not lines:
         raise ValueError("Empty text provided")
-    
-    idx = 0
-    found = False
-    
-    # Find the first line with two integers (num_jobs, num_machines)
-    while idx < len(lines):
-        parts = lines[idx].split()
-        if len(parts) >= 2:
-            try:
-                nj = int(parts[0])
-                nm = int(parts[1])
-                if 1 <= nj <= 1000 and 1 <= nm <= 1000:
-                    found = True
-                    break
-            except ValueError:
-                pass
-        idx += 1
-    
-    if not found:
-        raise ValueError(f"Could not find instance header (num_jobs num_machines)")
-    
-    parts = lines[idx].split()
-    num_jobs = int(parts[0])
-    num_machines = int(parts[1])
-    
-    print(f"  Loading: {num_jobs} jobs, {num_machines} machines")
-    
-    # Check if we have enough lines
-    available_lines = len(lines) - idx - 1
-    if available_lines < num_jobs:
+
+    header = lines[0].split()
+    if len(header) < 2:
+        raise ValueError("Missing header (num_jobs num_machines)")
+
+    num_jobs = int(header[0])
+    num_machines = int(header[1])
+
+    if len(lines) < 1 + num_jobs:
         raise ValueError(
-            f"Not enough data lines. Need {num_jobs} job lines, "
-            f"but only have {available_lines} lines after header"
-        )
-    
-    jobs = []
+            f"Need {num_jobs} job lines after header, but only have {len(lines)-1}")
+
+    jobs: JSSP = []
     for j in range(num_jobs):
-        line_idx = idx + 1 + j
-        
-        if line_idx >= len(lines):
-            raise ValueError(f"Job {j}: line index {line_idx} out of range")
-        
-        # Extract all integers from the line
-        nums = list(map(int, re.findall(r"-?\d+", lines[line_idx])))
-        
-        if len(nums) < 2:
-            raise ValueError(f"Job {j}: insufficient data (got {len(nums)} numbers)")
-        
-        # Create operation pairs (machine, processing_time)
-        ops = [(nums[i], nums[i+1]) for i in range(0, len(nums), 2)]
+        nums = list(map(int, re.findall(r"-?\d+", lines[1 + j])))
+
+        # OR-Lib JSSP typically has exactly 2*num_machines ints per job line
+        if len(nums) < 2 * num_machines:
+            raise ValueError(
+                f"Job {j}: expected at least {2*num_machines} integers, got {len(nums)}"
+            )
+
+        nums = nums[: 2 * num_machines]  # ignore extra tokens if any
+        ops = [(nums[i], nums[i + 1]) for i in range(0, len(nums), 2)]
         jobs.append(ops)
-    
-    print(f"  ✓ Parsed {len(jobs)} jobs successfully")
+
     return jobs, num_jobs, num_machines
 
+
 # ============================================================================
-# SCHEDULING
+# SCHEDULING / DECODING (JOB-BASED CHROMOSOME)
 # ============================================================================
 
 class ScheduleResult:
-    def __init__(self, makespan, start_times, end_times):
+    def __init__(self, makespan: int, start_times: Dict[Tuple[int, int], int], end_times: Dict[Tuple[int, int], int]):
         self.makespan = makespan
         self.start_times = start_times
         self.end_times = end_times
 
-def decode_chromosome(jobs, chromosome):
-    op_data = {}
-    for j, job in enumerate(jobs):
-        for o, (machine, proc) in enumerate(job):
-            op_data[(j, o)] = (machine, proc)
-    
-    next_op = [0] * len(jobs)
-    machine_avail = {}
-    start_times = {}
-    end_times = {}
-    
-    for job_id, op_idx in chromosome:
-        if op_idx != next_op[job_id]:
-            continue
-        machine, proc = op_data[(job_id, op_idx)]
-        avail_m = machine_avail.get(machine, 0)
-        avail_j = end_times.get((job_id, op_idx - 1), 0) if op_idx > 0 else 0
-        start = max(avail_m, avail_j)
+
+def decode_chromosome(jobs: JSSP, chromosome: Chromosome) -> ScheduleResult:
+    """
+    Job-based decoding:
+    chromosome = list of job IDs (each job repeated once per operation)
+    Each time job j appears, schedule its next unscheduled operation.
+    """
+    num_jobs = len(jobs)
+    next_op = [0] * num_jobs
+    machine_avail: Dict[int, int] = {}
+    job_avail: Dict[int, int] = {j: 0 for j in range(num_jobs)}
+
+    start_times: Dict[Tuple[int, int], int] = {}
+    end_times: Dict[Tuple[int, int], int] = {}
+
+    for job_id in chromosome:
+        op_idx = next_op[job_id]
+        if op_idx >= len(jobs[job_id]):
+            continue  # should not happen if chromosome counts are correct
+
+        machine, proc = jobs[job_id][op_idx]
+        start = max(machine_avail.get(machine, 0), job_avail[job_id])
         end = start + proc
+
         start_times[(job_id, op_idx)] = start
         end_times[(job_id, op_idx)] = end
+
         machine_avail[machine] = end
+        job_avail[job_id] = end
         next_op[job_id] += 1
-    
-    remaining = [(j, next_op[j]) for j in range(len(jobs)) if next_op[j] < len(jobs[j])]
-    for job_id, op_idx in sorted(remaining):
-        machine, proc = op_data[(job_id, op_idx)]
-        avail_m = machine_avail.get(machine, 0)
-        avail_j = end_times.get((job_id, op_idx - 1), 0) if op_idx > 0 else 0
-        start = max(avail_m, avail_j)
-        end = start + proc
-        start_times[(job_id, op_idx)] = start
-        end_times[(job_id, op_idx)] = end
-        machine_avail[machine] = end
-    
-    return ScheduleResult(max(end_times.values()) if end_times else 0, start_times, end_times)
+
+    makespan = max(end_times.values()) if end_times else 0
+    return ScheduleResult(makespan, start_times, end_times)
+
 
 # ============================================================================
-# GENETIC OPERATORS
+# INITIAL POPULATION (JOB-BASED)
 # ============================================================================
 
-def generate_initial_population(jobs, pop_size):
-    ops = [(j, o) for j, job in enumerate(jobs) for o in range(len(job))]
-    return [random.sample(ops, len(ops)) for _ in range(pop_size)]
+def job_counts(jobs: JSSP) -> List[int]:
+    return [len(job) for job in jobs]
 
-def order_crossover(p1, p2):
-    size = len(p1)
-    a, b = sorted(random.sample(range(size), 2))
-    seg = p1[a:b+1]
-    child = [None] * size
-    child[a:b+1] = seg
-    p2_filtered = [g for g in p2 if g not in seg]
-    idx = 0
-    for i in range(size):
-        if child[i] is None:
-            child[i] = p2_filtered[idx]
-            idx += 1
-    return child
 
-def pmx_crossover(p1, p2):
+def generate_initial_population(jobs: JSSP, pop_size: int) -> List[Chromosome]:
+    counts = job_counts(jobs)
+    base = []
+    for j, c in enumerate(counts):
+        base.extend([j] * c)
+
+    pop = []
+    for _ in range(pop_size):
+        chrom = base[:]
+        random.shuffle(chrom)
+        pop.append(chrom)
+    return pop
+
+
+# ============================================================================
+# CROSSOVERS FOR DUPLICATE GENES (JOB-BASED)
+# ============================================================================
+
+def segment_fill_crossover(p1: Chromosome, p2: Chromosome, counts: List[int]) -> Chromosome:
+    """
+    Two-point segment from p1; fill remaining positions from p2 in order,
+    respecting job multiplicities (counts).
+    """
     size = len(p1)
     a, b = sorted(random.sample(range(size), 2))
     child = [None] * size
     child[a:b+1] = p1[a:b+1]
-    mapping = {p2[i]: p1[i] for i in range(a, b + 1)}
-    for i in range(size):
-        if child[i] is None:
-            gene = p2[i]
-            while gene in child[a:b+1]:
-                gene = mapping.get(gene, gene)
-                if gene not in mapping:
-                    break
-            child[i] = gene
-    return child
 
-def position_crossover(p1, p2):
-    size = len(p1)
-    positions = random.sample(range(size), size // 3)
-    child = [None] * size
-    for pos in positions:
-        child[pos] = p1[pos]
-    p2_filtered = [g for g in p2 if g not in child]
+    remaining = counts[:]
+    for g in child[a:b+1]:
+        remaining[g] -= 1
+
     idx = 0
     for i in range(size):
-        if child[i] is None:
-            child[i] = p2_filtered[idx]
+        if child[i] is not None:
+            continue
+        while idx < size and remaining[p2[idx]] == 0:
             idx += 1
-    return child
+        child[i] = p2[idx]
+        remaining[p2[idx]] -= 1
+        idx += 1
 
-def swap_mutation(chrom, rate):
+    return child  # type: ignore
+
+
+def position_crossover_dups(p1: Chromosome, p2: Chromosome, counts: List[int]) -> Chromosome:
+    """
+    Keep a random set of positions from p1; fill the rest from p2 in order,
+    respecting job multiplicities.
+    """
+    size = len(p1)
+    keep = set(random.sample(range(size), max(1, size // 3)))
+    child = [None] * size
+
+    remaining = counts[:]
+    for i in keep:
+        g = p1[i]
+        child[i] = g
+        remaining[g] -= 1
+
+    idx = 0
+    for i in range(size):
+        if child[i] is not None:
+            continue
+        while idx < size and remaining[p2[idx]] == 0:
+            idx += 1
+        child[i] = p2[idx]
+        remaining[p2[idx]] -= 1
+        idx += 1
+
+    return child  # type: ignore
+
+
+def uniform_crossover_repair(p1: Chromosome, p2: Chromosome, counts: List[int]) -> Chromosome:
+    """
+    Uniform crossover with repair:
+    - First pass: pick p1/p2 gene with 50/50 chance if still available
+    - Second pass: fill remaining slots with leftover genes randomly
+    """
+    size = len(p1)
+    remaining = counts[:]
+    child = [None] * size
+
+    for i in range(size):
+        cand = p1[i] if random.random() < 0.5 else p2[i]
+        if remaining[cand] > 0:
+            child[i] = cand
+            remaining[cand] -= 1
+
+    leftovers = []
+    for job_id, rem in enumerate(remaining):
+        leftovers.extend([job_id] * rem)
+    random.shuffle(leftovers)
+
+    li = 0
+    for i in range(size):
+        if child[i] is None:
+            child[i] = leftovers[li]
+            li += 1
+
+    return child  # type: ignore
+
+
+# ============================================================================
+# MUTATIONS
+# ============================================================================
+
+def swap_mutation(chrom: Chromosome, rate: float) -> Chromosome:
     if random.random() < rate:
         chrom = chrom[:]
         i, j = random.sample(range(len(chrom)), 2)
         chrom[i], chrom[j] = chrom[j], chrom[i]
     return chrom
 
-def insert_mutation(chrom, rate):
+
+def insert_mutation(chrom: Chromosome, rate: float) -> Chromosome:
     if random.random() < rate:
+        chrom = chrom[:]
         i, j = sorted(random.sample(range(len(chrom)), 2))
-        gene = chrom[i]
-        chrom = chrom[:i] + chrom[i+1:]
+        gene = chrom.pop(i)
         chrom.insert(j, gene)
     return chrom
 
-def inversion_mutation(chrom, rate):
+
+def inversion_mutation(chrom: Chromosome, rate: float) -> Chromosome:
     if random.random() < rate:
         chrom = chrom[:]
         i, j = sorted(random.sample(range(len(chrom)), 2))
         chrom[i:j+1] = reversed(chrom[i:j+1])
     return chrom
 
-def scramble_mutation(chrom, rate):
+
+def scramble_mutation(chrom: Chromosome, rate: float) -> Chromosome:
     if random.random() < rate:
         chrom = chrom[:]
         i, j = sorted(random.sample(range(len(chrom)), 2))
@@ -362,11 +367,17 @@ def scramble_mutation(chrom, rate):
         chrom[i:j+1] = seg
     return chrom
 
-def tournament_selection(pop, fitness_map, k=3):
+
+# ============================================================================
+# SELECTIONS
+# ============================================================================
+
+def tournament_selection(pop: List[Chromosome], fitness_map: Dict[Tuple[int, ...], int], k: int = 3) -> Chromosome:
     comps = random.sample(pop, k)
     return min(comps, key=lambda c: fitness_map[tuple(c)])
 
-def roulette_selection(pop, fitness_map):
+
+def roulette_selection(pop: List[Chromosome], fitness_map: Dict[Tuple[int, ...], int]) -> Chromosome:
     max_fit = max(fitness_map.values())
     adj_fit = [max_fit - fitness_map[tuple(c)] + 1 for c in pop]
     total = sum(adj_fit)
@@ -380,7 +391,8 @@ def roulette_selection(pop, fitness_map):
             return pop[i]
     return pop[-1]
 
-def rank_selection(pop, fitness_map):
+
+def rank_selection(pop: List[Chromosome], fitness_map: Dict[Tuple[int, ...], int]) -> Chromosome:
     sorted_pop = sorted(pop, key=lambda c: fitness_map[tuple(c)])
     total = len(sorted_pop) * (len(sorted_pop) + 1) // 2
     r = random.random() * total
@@ -391,216 +403,290 @@ def rank_selection(pop, fitness_map):
             return chrom
     return sorted_pop[-1]
 
+
 # ============================================================================
-# GA
+# GENETIC ALGORITHM (WITH STATIONARY DETECTION)
 # ============================================================================
 
-def genetic_algorithm(jobs, pop_size=100, gens=200, cx_rate=0.9, mut_rate=0.2,
-                     cx_method="order", mut_method="swap", sel_method="tournament", k=3, verbose=True):
-    cross_fn = {"order": order_crossover, "pmx": pmx_crossover, "position": position_crossover}[cx_method]
-    mut_fn = {"swap": swap_mutation, "insert": insert_mutation, "inversion": inversion_mutation, "scramble": scramble_mutation}[mut_method]
-    
+def genetic_algorithm(
+    jobs: JSSP,
+    pop_size: int = 100,
+    gens: int = 200,
+    cx_rate: float = 0.9,
+    mut_rate: float = 0.2,
+    cx_method: str = "segment",
+    mut_method: str = "swap",
+    sel_method: str = "tournament",
+    k: int = 3,
+    patience: int = 50,
+    verbose: bool = True
+):
+    counts = job_counts(jobs)
+
+    cross_fn = {
+        "segment": segment_fill_crossover,
+        "position": position_crossover_dups,
+        "uniform": uniform_crossover_repair
+    }[cx_method]
+
+    mut_fn = {
+        "swap": swap_mutation,
+        "insert": insert_mutation,
+        "inversion": inversion_mutation,
+        "scramble": scramble_mutation
+    }[mut_method]
+
     pop = generate_initial_population(jobs, pop_size)
-    best, best_ms = None, math.inf
-    history = []
-    
+
+    best: Optional[Chromosome] = None
+    best_ms = math.inf
+    history: List[int] = []
+    no_improve = 0
+
     for gen in range(gens):
         evals = [(c, decode_chromosome(jobs, c).makespan) for c in pop]
         evals.sort(key=lambda x: x[1])
         fit_map = {tuple(c): ms for c, ms in evals}
-        
+
         if evals[0][1] < best_ms:
-            best, best_ms = evals[0][0], evals[0][1]
+            best = evals[0][0]
+            best_ms = evals[0][1]
+            no_improve = 0
+        else:
+            no_improve += 1
+
         history.append(best_ms)
-        
-        if verbose and gen % 50 == 0:
-            print(f"  Gen {gen:3d}: {best_ms}")
-        
+
+        if verbose and (gen % 50 == 0 or gen == gens - 1):
+            print(f"  Gen {gen:3d}: best={best_ms} | no_improve={no_improve}")
+
+        # stationary stopping
+        if no_improve >= patience:
+            if verbose:
+                print(
+                    f"  Stopped early (stationary): no improvement for {patience} generations.")
+            break
+
+        # elitism: keep best in current generation
         new_pop = [evals[0][0]]
+
+        pool = [c for c, _ in evals]
         while len(new_pop) < pop_size:
             if sel_method == "tournament":
-                p1, p2 = tournament_selection([c for c, _ in evals], fit_map, k), tournament_selection([c for c, _ in evals], fit_map, k)
+                p1 = tournament_selection(pool, fit_map, k)
+                p2 = tournament_selection(pool, fit_map, k)
             elif sel_method == "roulette":
-                p1, p2 = roulette_selection([c for c, _ in evals], fit_map), roulette_selection([c for c, _ in evals], fit_map)
+                p1 = roulette_selection(pool, fit_map)
+                p2 = roulette_selection(pool, fit_map)
             else:
-                p1, p2 = rank_selection([c for c, _ in evals], fit_map), rank_selection([c for c, _ in evals], fit_map)
-            child = cross_fn(p1, p2) if random.random() < cx_rate else p1[:]
+                p1 = rank_selection(pool, fit_map)
+                p2 = rank_selection(pool, fit_map)
+
+            if random.random() < cx_rate:
+                child = cross_fn(p1, p2, counts)
+            else:
+                child = p1[:]
+
             child = mut_fn(child, mut_rate)
             new_pop.append(child)
+
         pop = new_pop
-    
-    if verbose:
-        print(f"  Final: {best_ms}")
+
+    if best is None:
+        best = pop[0]
     return best, decode_chromosome(jobs, best), history
 
+
 # ============================================================================
-# SA
+# SIMULATED ANNEALING (OPTIONAL METHOD)
 # ============================================================================
 
-def simulated_annealing(jobs, init_chrom, T0=1000, Tf=0.1, alpha=0.95, iters=50):
+def simulated_annealing(jobs: JSSP, init_chrom: Chromosome, T0=1000, Tf=0.1, alpha=0.95, iters=50):
     curr = init_chrom[:]
     curr_ms = decode_chromosome(jobs, curr).makespan
-    best, best_ms = curr, curr_ms
+    best, best_ms = curr[:], curr_ms
+
     T = T0
     history = []
-    
+
     while T > Tf:
         for _ in range(iters):
             i, j = random.sample(range(len(curr)), 2)
-            neighbor = curr[:]
-            neighbor[i], neighbor[j] = neighbor[j], neighbor[i]
-            neigh_ms = decode_chromosome(jobs, neighbor).makespan
+            neigh = curr[:]
+            neigh[i], neigh[j] = neigh[j], neigh[i]
+            neigh_ms = decode_chromosome(jobs, neigh).makespan
+
             delta = neigh_ms - curr_ms
             if delta <= 0 or random.random() < math.exp(-delta / T):
-                curr, curr_ms = neighbor, neigh_ms
-                if neigh_ms < best_ms:
-                    best, best_ms = neighbor, neigh_ms
+                curr, curr_ms = neigh, neigh_ms
+                if curr_ms < best_ms:
+                    best, best_ms = curr[:], curr_ms
+
             history.append(best_ms)
         T *= alpha
+
     return best, decode_chromosome(jobs, best), history
 
+
 # ============================================================================
-# EXPERIMENTS
+# EXPERIMENT CONFIGS
 # ============================================================================
 
+@dataclass
 class Config:
-    def __init__(self, name, pop, gens, cx_r, mut_r, cx_m, mut_m, sel_m, k=3):
-        self.name, self.pop, self.gens, self.cx_r, self.mut_r = name, pop, gens, cx_r, mut_r
-        self.cx_m, self.mut_m, self.sel_m, self.k = cx_m, mut_m, sel_m, k
+    name: str
+    pop: int
+    gens: int
+    cx_r: float
+    mut_r: float
+    cx_m: str
+    mut_m: str
+    sel_m: str
+    k: int = 3
+    patience: int = 50
 
-def get_configs():
+
+def get_configs() -> List[Config]:
+    # 6 different combinations (meets the requirement)
     return [
-        Config("C1: OX+Swap+Tour", 100, 200, 0.9, 0.2, "order", "swap", "tournament", 3),
-        Config("C2: PMX+Insert+Roul", 120, 200, 0.85, 0.25, "pmx", "insert", "roulette"),
-        Config("C3: Pos+Inv+Rank", 150, 150, 0.8, 0.3, "position", "inversion", "rank"),
-        Config("C4: OX+Scram+Tour", 200, 150, 0.9, 0.15, "order", "scramble", "tournament", 5),
-        Config("C5: PMX+Swap+Roul", 100, 250, 0.85, 0.4, "pmx", "swap", "roulette"),
-        Config("C6: Pos+Insert+Rank", 150, 180, 0.88, 0.22, "position", "insert", "rank")
+        Config("C1: Seg+Swap+Tour",    100, 250, 0.90, 0.20,
+               "segment",  "swap",     "tournament", 3, 60),
+        Config("C2: Seg+Insert+Roul",  120, 250, 0.85, 0.25,
+               "segment",  "insert",   "roulette",   3, 60),
+        Config("C3: Pos+Inv+Rank",     150, 220, 0.80, 0.30,
+               "position", "inversion", "rank",       3, 60),
+        Config("C4: Pos+Scram+Tour",   200, 200, 0.90, 0.15,
+               "position", "scramble", "tournament", 5, 60),
+        Config("C5: Uni+Swap+Roul",    120, 250, 0.85, 0.30,
+               "uniform",  "swap",     "roulette",   3, 60),
+        Config("C6: Uni+Insert+Rank",  150, 220, 0.88, 0.22,
+               "uniform",  "insert",   "rank",       3, 60),
     ]
 
-def run_experiments(name, jobs, nj, nm):
-    print(f"\n{'='*80}\nDATASET: {name} ({nj}x{nm})\n{'='*80}\n")
+
+# ============================================================================
+# RUN EXPERIMENTS + PLOTS
+# ============================================================================
+
+def run_experiments(instance_name: str, jobs: JSSP, nj: int, nm: int):
+    print(f"\n{'='*80}\nDATASET: {instance_name} ({nj}x{nm})\n{'='*80}\n")
+
     results = []
     for cfg in get_configs():
         print(f"\n--- {cfg.name} ---")
-        _, res, hist = genetic_algorithm(jobs, cfg.pop, cfg.gens, cfg.cx_r, cfg.mut_r,
-                                        cfg.cx_m, cfg.mut_m, cfg.sel_m, cfg.k, True)
-        results.append({'cfg': cfg, 'ms': res.makespan, 'hist': hist})
+        _, res, hist = genetic_algorithm(
+            jobs,
+            pop_size=cfg.pop,
+            gens=cfg.gens,
+            cx_rate=cfg.cx_r,
+            mut_rate=cfg.mut_r,
+            cx_method=cfg.cx_m,
+            mut_method=cfg.mut_m,
+            sel_method=cfg.sel_m,
+            k=cfg.k,
+            patience=cfg.patience,
+            verbose=True
+        )
+        results.append({"cfg": cfg, "ms": res.makespan, "hist": hist})
         print(f"✓ Makespan: {res.makespan}\n")
-    
-    print(f"\n{'='*80}\nSUMMARY - {name}\n{'='*80}")
-    print(f"{'Config':<30} {'Pop':<6} {'Gen':<6} {'Makespan':<10}")
-    print('-'*80)
+
+    # Summary table
+    print(f"\n{'='*80}\nSUMMARY - {instance_name}\n{'='*80}")
+    print(f"{'Config':<28} {'Pop':<6} {'Gen(max)':<9} {'Stops?':<8} {'Makespan':<10}")
+    print("-"*80)
     for r in results:
-        print(f"{r['cfg'].name:<30} {r['cfg'].pop:<6} {r['cfg'].gens:<6} {r['ms']:<10}")
-    print('='*80)
-    
-    best = min(results, key=lambda x: x['ms'])
+        cfg = r["cfg"]
+        ran = len(r["hist"])
+        stopped = "yes" if ran < cfg.gens else "no"
+        print(
+            f"{cfg.name:<28} {cfg.pop:<6} {cfg.gens:<9} {stopped:<8} {r['ms']:<10}")
+    print("="*80)
+
+    best = min(results, key=lambda x: x["ms"])
     print(f"\n🏆 BEST: {best['cfg'].name} - {best['ms']}\n")
-    
+
+    # Plot best evolution
     plt.figure(figsize=(10, 6))
-    plt.plot(best['hist'], linewidth=2, color='#2E86AB')
-    plt.xlabel('Generation')
-    plt.ylabel('Best Makespan')
-    plt.title(f'Evolution - {name}')
+    plt.plot(best["hist"], linewidth=2)
+    plt.xlabel("Generation")
+    plt.ylabel("Best Makespan")
+    plt.title(f"Evolution (Best Config) - {instance_name}")
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
-    plt.savefig(f"evolution_{name}.png", dpi=300)
-    print(f"📊 Saved evolution_{name}.png")
+    plt.savefig(f"evolution_{instance_name}.png", dpi=300)
     plt.close()
-    
+    print(f" Saved evolution_{instance_name}.png")
+
+    # Plot comparison
     plt.figure(figsize=(12, 6))
-    colors = ['#2E86AB', '#A23B72', '#F18F01', '#C73E1D', '#6A994E', '#BC4B51']
-    for i, r in enumerate(results):
-        plt.plot(r['hist'], label=f"{r['cfg'].name} ({r['ms']})", lw=1.5, color=colors[i], alpha=0.8)
-    plt.xlabel('Generation')
-    plt.ylabel('Best Makespan')
-    plt.title(f'Comparison - {name}')
-    plt.legend(loc='best', fontsize=9)
+    for r in results:
+        plt.plot(r["hist"], lw=1.5, alpha=0.85,
+                 label=f"{r['cfg'].name} ({r['ms']})")
+    plt.xlabel("Generation")
+    plt.ylabel("Best Makespan")
+    plt.title(f"Comparison - {instance_name}")
+    plt.legend(loc="best", fontsize=9)
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
-    plt.savefig(f"comparison_{name}.png", dpi=300)
-    print(f"📊 Saved comparison_{name}.png")
+    plt.savefig(f"comparison_{instance_name}.png", dpi=300)
     plt.close()
-    
+    print(f"Saved comparison_{instance_name}.png")
+
     return results, best
+
+
+# ============================================================================
+# MAIN
+# ============================================================================
 
 def main():
     print("\n" + "="*80)
-    print("JOB SHOP SCHEDULING - GA EXPERIMENTS")
+    print("JOB SHOP SCHEDULING - GA EXPERIMENTS (FIXED VERSION)")
     print("Loading from: jobshop1.txt")
     print("="*80)
-    
-    # Load datasets from file ONLY
-    print("\nReading jobshop1.txt file...")
-    datasets = parse_orlib_file('jobshop1.txt')
-    
-    if datasets is None or len(datasets) == 0:
-        print("\n❌ ERROR: Cannot proceed without jobshop1.txt file!")
-        print("Please ensure jobshop1.txt is in the same directory as this script.")
-        print("\nYou can download it from:")
-        print("http://people.brunel.ac.uk/~mastjjb/jeb/orlib/files/jobshop1.txt")
-        return
-    
-    print(f"\n✓ Successfully loaded {len(datasets)} instances from jobshop1.txt")
-    print(f"Available instances: {list(datasets.keys())[:10]}...")
-    
-    # Select instances: ft06 (6x6), la16 (10x10), abz7 (20x15)
-    # OR use first 3 instances if named instances not found
-    dataset_order = ['ft06', 'la16', 'abz7']
-    
-    # Check which instances are available
-    available = []
-    for name in dataset_order:
-        if name in datasets:
-            available.append(name)
-    
-    # If we don't have the expected instances, use what we have
-    if len(available) < 3:
-        print(f"\n⚠ Warning: Not all expected instances found.")
-        print(f"Expected: {dataset_order}")
-        print(f"Found: {available}")
-        print(f"\nUsing first 3 available instances instead...")
-        available = list(datasets.keys())[:3]
-    
-    if not available:
-        print("❌ No valid instances found!")
-        return
-    
-    print(f"\nProcessing instances: {available}\n")
-    
+
+    filename = "jobshop1.txt"
+
+    # Required sizes (matches teacher recommendation):
+    # - 3-5 machines: la01 (10x5)
+    # - ~10 machines: la16 (10x10)
+    # - 15+ machines: abz7 (20x15)
+    dataset_order = ["la01", "la16", "abz7"]
+
     all_res = {}
-    
-    for name in available:
+
+    for name in dataset_order:
+        print(f"\n{'='*80}\nProcessing: {name}\n{'='*80}")
         try:
-            print(f"\n{'='*80}")
-            print(f"Processing: {name}")
-            print('='*80)
-            jobs, nj, nm = load_jssp_from_text(datasets[name])
+            instance_text = extract_instance_text(filename, name)
+            jobs, nj, nm = load_jssp_from_text(instance_text)
             res, best = run_experiments(name, jobs, nj, nm)
             all_res[name] = (res, best, jobs)
         except Exception as e:
-            print(f"\n❌ ERROR processing {name}: {e}")
-            import traceback
-            traceback.print_exc()
+            print(f"\n ERROR processing {name}: {e}")
             continue
-    
+
     if not all_res:
-        print("\n❌ No instances were successfully processed!")
+        print("\n No instances were successfully processed!")
         return
-    
-    print(f"\n{'='*80}\nSIMULATED ANNEALING\n{'='*80}\n")
-    for name in available:
-        if name in all_res:
-            res, best, jobs = all_res[name]
-            print(f"--- {name} ---")
-            init_sol = generate_initial_population(jobs, 1)[0]
-            _, sa_res, _ = simulated_annealing(jobs, init_sol, 1000, 0.1, 0.95, 50)
-            print(f"GA: {best['ms']} | SA: {sa_res.makespan}")
-            imp = best['ms'] - sa_res.makespan
-            print(f"{'Improved' if imp > 0 else 'No change'}\n")
-    
-    print(f"{'='*80}\n✅ COMPLETE!\n{'='*80}\n")
+
+    print(f"\n{'='*80}\nSIMULATED ANNEALING (OPTIONAL)\n{'='*80}\n")
+    for name in dataset_order:
+        if name not in all_res:
+            continue
+        res, best, jobs = all_res[name]
+        init_sol = generate_initial_population(jobs, 1)[0]
+        _, sa_res, _ = simulated_annealing(
+            jobs, init_sol, T0=1000, Tf=0.1, alpha=0.95, iters=50)
+
+        print(f"--- {name} ---")
+        print(f"Best GA: {best['ms']} | SA: {sa_res.makespan}")
+        diff = best["ms"] - sa_res.makespan
+        print(
+            f"{'SA better' if diff > 0 else 'GA better or equal'} (difference: {abs(diff)})\n")
+
+    print(f"{'='*80}\n COMPLETE!\n{'='*80}\n")
+
 
 if __name__ == "__main__":
     main()
